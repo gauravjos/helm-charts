@@ -1,0 +1,100 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "fullname" . }}
+  labels:
+     chart: "{{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}"
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "fullname" . }}
+    spec:
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.service.internalPort }}
+        securityContext:
+              privileged: true
+              capabilities:
+                  add:
+                       - SYS_ADMIN
+
+        env:
+            - name: MEDIABUCKET
+              value: {{.Values.env.mediabucket }}
+            - name: DB_HOST
+              # Connect to the SQL proxy over the local network on a fixed port.
+              # Change the [PORT] to the port number used by your database
+              # (e.g. 3306).
+              value: {{.Values.env.db_host}}
+            # These secrets are required to start the pod.
+            # [START cloudsql_secrets]
+            - name: DB_PASSWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{.Values.secrets.db_secret.name }}
+                  key:  {{.Values.secrets.db_secret.passwdkey }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{.Values.secrets.db_secret.name }}
+                  key: {{.Values.secrets.db_secret.userkey }}
+            - name: DB_NAME
+              value: {{.Values.env.db_name }}
+            - name: BK_FRONT
+              value: {{.Values.env.bk_front}}
+            - name: SESSION_SAVE
+              value:  {{.Values.env.session_save}}
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/etc/bucketaccess/{{.Values.secrets.bucketaccess}}"
+        volumeMounts:
+              - name: gcsfuse-credentials
+                mountPath: /etc/bucketaccess
+                readOnly: true
+        livenessProbe:
+          httpGet:
+            path: {{.Values.healthcheck.path }}
+            port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: {{.Values.healthcheck.path }}
+            timeoutSeconds:  {{.Values.healthcheck.timeoutSeconds }}
+        readinessProbe:
+          httpGet:
+            path: {{.Values.healthcheck.path }}
+            port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: {{.Values.healthcheck.initialDelaySeconds }}
+            timeoutSeconds:  {{.Values.healthcheck.timeoutSeconds }}
+        resources:
+        # [START proxy_container]
+        - image: gcr.io/cloudsql-docker/gce-proxy:1.09
+          name: cloudsql-proxy
+          command: ["/cloud_sql_proxy", "--dir=/cloudsql",
+                    "-instances={{.Values.cloud_instance.db_instance}}=tcp:3306",
+                    "-credential_file=/secrets/cloudsql/{{.Values.secrets.sql_access}}"]
+          volumeMounts:
+            - name: cloudsql-instance-credentials
+              mountPath: /secrets/cloudsql
+              readOnly: true
+            - name: ssl-certs
+              mountPath: /etc/ssl/certs
+            - name: cloudsql
+              mountPath: /cloudsql
+        # [END proxy_container]
+      # [START volumes]
+      volumes:
+        - name: cloudsql-instance-credentials
+          secret:
+            secretName: {{.Values.sql_access.name}}
+        - name: gcsfuse-credentials
+          secret:
+             secretName: {{.Values.gcs_secret.name}}
+        - name: ssl-certs
+          hostPath:
+            path: /etc/ssl/certs
+        - name: cloudsql
+          emptyDir:
+      # [END volumes]
+{{ toYaml .Values.resources | indent 10 }}
